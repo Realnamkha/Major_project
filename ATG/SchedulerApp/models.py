@@ -63,7 +63,7 @@ class InstructorAvailability(models.Model):
 class Course(models.Model):
     course_number = models.CharField(max_length=5, primary_key=True)
     course_name = models.CharField(max_length=40)
-    max_numb_students = models.CharField(max_length=65)
+    max_period = models.IntegerField(default=2)
     instructors = models.ManyToManyField(Instructor)
 
     def __str__(self):

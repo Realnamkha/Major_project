@@ -14,10 +14,10 @@ import matplotlib.pyplot as plt
 import os
 from django.conf import settings
 
-POPULATION_SIZE = 300
+POPULATION_SIZE = 100
 NUMB_OF_ELITE_SCHEDULES = 10
 TOURNAMENT_SELECTION_SIZE = 5
-MUTATION_RATE = 0.01
+MUTATION_RATE = 0.1
 VARS = {'generationNum': 0,
         'terminateGens': False}
 
@@ -138,8 +138,8 @@ class Schedule:
         newClass.set_meetingTime(
             data.get_meetingTimes()[random.randrange(0, len(data.get_meetingTimes()))])
 
-        newClass.set_room(
-            data.get_rooms()[random.randrange(0, len(data.get_rooms()))])
+        # newClass.set_room(
+        #     data.get_rooms()[random.randrange(0, len(data.get_rooms()))])
 
         crs_inst = course.instructors.all()
         newClass.set_instructor(
@@ -160,7 +160,7 @@ class Schedule:
             # print(f"Available meeting times: {available_meeting_times}")
 
             if n > available_meeting_times:
-                # print(f"Reducing n from {n} to available meeting times {available_meeting_times}.")
+                print(f"Reducing n from {n} to available meeting times {available_meeting_times}.")
                 n = available_meeting_times  # Ensure we don't exceed available meeting times
 
             courses = dept.courses.all()
@@ -194,52 +194,132 @@ class Schedule:
 
 
     def calculateFitness(self):
-        self._numberOfHardConflicts = 0  # Track hard conflicts
-        self._numberOfSoftConflicts = 0  # Track soft conflicts
-        classes = self.getClasses()
+        # Dictionaries to track violations for each constraint
+        self._hard_constraint_violations = {
+            'same_course_same_section': 0,
+            'instructor_conflict': 0,
+            'duplicate_time_section': 0,
+            'instructor_availability': 0,
+            'total_classes_mismatch': 0,
+            'course_frequency': 0  # New constraint for course frequency
+        }
 
-        # Define weights for hard and soft constraints
+        self._soft_constraint_violations = {
+            'no_consecutive_classes': 0,
+            'noon_classes': 0,
+            'break_time_conflict': 0,
+            'balanced_days': 0,
+        }
+
+        # Define weights
         hard_weights = {
-            'seating_capacity': 1,            
-            'same_course_same_section': 1.5,    
-            'instructor_conflict': 2,         
-            'duplicate_time_section': 2,      
-            'instructor_availability': 2,     
+            'same_course_same_section': 3,
+            'instructor_conflict': 3,
+            'duplicate_time_section': 3,
+            'instructor_availability': 3,
+            'total_classes_mismatch': 3,
+            'course_frequency': 5, 
         }
 
         soft_weights = {
-            'no_consecutive_classes': 0.5,      
-            'morning_classes': 1,           
-            'break_time_conflict': 0.3,         
-            'balanced_days': 0.3              
+            'no_consecutive_classes': 0.5,
+            'noon_classes': 3,
+            'break_time_conflict': 0.3,
+            'balanced_days': 0.3,
         }
 
+        # Retrieve all scheduled classes
+        classes = self.getClasses()
+
         # Check hard constraints
-        self.check_seating_capacity(classes, hard_weights)
+        self.check_total_classes(classes, hard_weights)
         for i in range(len(classes)):
             self.check_course_conflicts(classes, i, hard_weights)
             self.check_instructor_conflict(classes, i, hard_weights)
             self.check_duplicate_time(classes, i, hard_weights)
             self.check_instructor_availability(classes, i, hard_weights)
-
+        self.check_course_frequency(classes, hard_weights)
         # Check soft constraints
         for i in range(len(classes)):
             self.check_consecutive_classes(classes, i, soft_weights)
-            self.check_morning_classes(classes, i, soft_weights)
+            self.check_noon_classes(classes, i, soft_weights)
             self.check_break_time_conflict(classes, i, soft_weights)
-
-        # Check balance across the week (this could be a soft constraint as well)
+            
         self.check_balanced_days(classes, soft_weights)
+        # Calculate penalties
+        hard_penalty = sum(
+            hard_weights[key] * self._hard_constraint_violations[key] for key in hard_weights
+        )
+        soft_penalty = sum(
+            soft_weights[key] * self._soft_constraint_violations[key] for key in soft_weights
+        )
+        
+        hard_penalty /= max(1, len(hard_weights))  # Prevent division by zero
+        soft_penalty /= max(1, len(soft_weights))
+        
+        print(f"Hard Penalty: {hard_penalty}")  # Debug print
+        print(f"Soft Penalty: {soft_penalty}")
+        
+        # Calculate fitness using the given formula
+        total_penalty = soft_penalty + (hard_penalty ** 2)
+        fitness = (1+10)/(total_penalty+1)
+        print(f"Fitness: {fitness}") 
+        # Assign fitness value to the schedule
+        self._fitness = fitness
+        return self._fitness
+    
+    
+    def check_course_frequency(self, classes, hard_weights):
+    # Create a dictionary to track the number of occurrences for each course
+        course_count = {}
 
-        # Fitness calculation: Combine hard and soft conflicts with different penalties
-        total_conflict = (self._numberOfHardConflicts * 10) + self._numberOfSoftConflicts  # Hard conflicts are weighted more
-        return 1 / (total_conflict + 1)  # Avoid division by zero
+        for cls in classes:
+            course = cls.course
+            if course not in course_count:
+                course_count[course] = 0
+            course_count[course] += 1
 
-    # Check methods for hard constraints
-    def check_seating_capacity(self, classes, weights):
-        for i in range(len(classes)):
-            if classes[i].room.seating_capacity < int(classes[i].course.max_numb_students):
-                self._numberOfHardConflicts += weights['seating_capacity']
+        # For each course, check if it appears the required number of times per week
+        for course, count in course_count.items():
+            required_count = course.max_period  # assuming each course has this attribute
+            if count != required_count:
+                print(f"Violation: {course} should appear {required_count} times but appears {count} times.")
+                self._hard_constraint_violations['course_frequency'] += 1
+    
+    
+    def check_total_classes(self, classes, weights):
+        # Initialize a dictionary to track the number of classes per section
+        section_classes = {}
+
+        # print("Checking total classes per section...")  # Debug print
+
+        for cls in classes:
+            section = cls.section  # Assuming each class has a 'section' attribute
+            
+            # If section is a string (like section_id), retrieve the actual Section object
+            if isinstance(section, str):
+                section = Section.objects.get(section_id=section)
+            
+            if section not in section_classes:
+                section_classes[section] = 0
+            section_classes[section] += 1
+
+        # print(f"Total classes per section: {section_classes}")  # Debug print
+
+        # Check if the number of classes in each section matches the expected number
+        for section, num_classes in section_classes.items():
+            # Retrieve the section's allowed number of classes (e.g., from the Section model)
+            allowed_classes = section.num_class_in_week
+            # print(f"Section: {section}, Total Classes: {num_classes}, Allowed Classes: {allowed_classes}")  # Debug print
+
+            # Violation if total classes do not match the expected number
+            if num_classes != allowed_classes:
+                # print(f"Violation: Section {section} has a mismatch in total classes.")  # Debug print
+                self._hard_constraint_violations['total_classes_mismatch'] += 1
+
+
+    
+
 
     def check_course_conflicts(self, classes, i, weights):
         for j in range(i + 1, len(classes)):
@@ -247,20 +327,20 @@ class Schedule:
             day_j = str(classes[j].meeting_time).split()[0]
             if (classes[i].course.course_name == classes[j].course.course_name and 
                 day_i == day_j and classes[i].section == classes[j].section):
-                self._numberOfHardConflicts += weights['same_course_same_section']
+                self._hard_constraint_violations['same_course_same_section'] += 1
 
     def check_instructor_conflict(self, classes, i, weights):
         for j in range(i + 1, len(classes)):
             if (classes[i].section != classes[j].section and 
                 classes[i].meeting_time == classes[j].meeting_time and 
                 classes[i].instructor == classes[j].instructor):
-                self._numberOfHardConflicts += weights['instructor_conflict']
+                self._hard_constraint_violations['instructor_conflict'] += 1
 
     def check_duplicate_time(self, classes, i, weights):
         for j in range(i + 1, len(classes)):
             if (classes[i].section == classes[j].section and 
                 classes[i].meeting_time == classes[j].meeting_time):
-                self._numberOfHardConflicts += weights['duplicate_time_section']
+                self._hard_constraint_violations['duplicate_time_section'] += 1
 
     def check_instructor_availability(self, classes, i, weights):
         instructor = classes[i].instructor
@@ -272,27 +352,24 @@ class Schedule:
         end_time = self.parse_time(end_time_str)
 
         if start_time < availability_start or end_time > availability_end:
-            self._numberOfHardConflicts += weights['instructor_availability']
+            self._hard_constraint_violations['instructor_availability'] += 1
 
-    # Check methods for soft constraints
     def check_consecutive_classes(self, classes, i, weights):
         for j in range(i + 1, len(classes)):
             if classes[i].instructor == classes[j].instructor:
                 time_i_end = self.parse_time(classes[i].meeting_time.time.split(' - ')[1])
                 time_j_start = self.parse_time(classes[j].meeting_time.time.split(' - ')[0])
                 if time_i_end == time_j_start:
-                    self._numberOfSoftConflicts += weights['no_consecutive_classes']
+                    self._soft_constraint_violations['no_consecutive_classes'] += 1
 
-    def check_morning_classes(self, classes, i, weights):
-        morning_start = self.parse_time('06:00')
-        morning_end = self.parse_time('12:00')
+    def check_noon_classes(self, classes, i, weights):
+        noon_start = self.parse_time('10:00')
+        noon_end = self.parse_time('15:00')
         start_time_str, _ = classes[i].meeting_time.time.split(' - ')
         start_time = self.parse_time(start_time_str)
 
-        if morning_start <= start_time <= morning_end:
-            self._numberOfSoftConflicts += weights['morning_classes'] * 0.5  # Lower penalty for morning classes
-        else:
-            self._numberOfSoftConflicts += weights['morning_classes'] * 3.5  # Higher penalty for non-morning classes
+        if noon_start <= start_time <= noon_end:
+            self._soft_constraint_violations['noon_classes'] += 1
 
     def check_break_time_conflict(self, classes, i, weights):
         break_start = self.parse_time('10:00')
@@ -303,7 +380,7 @@ class Schedule:
         end_time = self.parse_time(end_time_str)
 
         if start_time < break_end and end_time > break_start:
-            self._numberOfSoftConflicts += weights['break_time_conflict']
+            self._soft_constraint_violations['break_time_conflict'] += 1
 
     def check_balanced_days(self, classes, weights):
         day_class_count = {}
@@ -315,42 +392,41 @@ class Schedule:
         max_day = max(day_class_count.values())
         min_day = min(day_class_count.values())
         if max_day - min_day > 2:
-            self._numberOfSoftConflicts += weights['balanced_days']
-
-
-
-        
-    def __str__(self):
-        """Return a string representation of the schedule."""
-        classes_info = [f"{cls.course.course_name} - {cls.meeting_time} - {cls.room}" for cls in self._classes]
-        return f"Schedule with {len(self._classes)} classes:\n" + "\n".join(classes_info)
+            self._soft_constraint_violations['balanced_days'] += 1
 
 
 
 class GeneticAlgorithm:
+    def __init__(self, initial_temperature=1.0, cooling_rate=0.99):
+        self.temperature = initial_temperature  # Initial temperature for mutation
+        self.cooling_rate = cooling_rate  # Cooling rate for temperature reduction
+
     def evolve(self, population):
         return self._mutatePopulation(self._crossoverPopulation(population))
 
     def _crossoverPopulation(self, popula):
         crossoverPopula = Population(0)
-        for i in range(NUMB_OF_ELITE_SCHEDULES):#how is elite schedule is generated
+        
+        # Add elite schedules directly to the new population
+        for i in range(NUMB_OF_ELITE_SCHEDULES):
             crossoverPopula.getSchedules().append(popula.getSchedules()[i])
 
+        # Perform tournament selection and crossover for the rest of the population
         for i in range(NUMB_OF_ELITE_SCHEDULES, POPULATION_SIZE):
             scheduleX = self._tournamentPopulation(popula)
             scheduleY = self._tournamentPopulation(popula)
-
-            crossoverPopula.getSchedules().append(
-                self._crossoverSchedule(scheduleX, scheduleY))
+            crossoverPopula.getSchedules().append(self._crossoverSchedule(scheduleX, scheduleY))
 
         return crossoverPopula
 
     def _mutatePopulation(self, population):
+        # Mutate the population, skipping elite schedules
         for i in range(NUMB_OF_ELITE_SCHEDULES, POPULATION_SIZE):
             self._mutateSchedule(population.getSchedules()[i])
         return population
 
     def _crossoverSchedule(self, scheduleX, scheduleY):
+        # Perform one-point crossover to generate a new schedule
         crossoverSchedule = Schedule().initialize()
         for i in range(0, len(crossoverSchedule.getClasses())):
             if random.random() > 0.5:
@@ -360,22 +436,36 @@ class GeneticAlgorithm:
         return crossoverSchedule
 
     def _mutateSchedule(self, mutateSchedule):
+        # Simulated Annealing based mutation
+
+        # Decrease temperature over generations
+        self.temperature *= self.cooling_rate
+        
+        # Calculate dynamic mutation rate based on temperature
+        dynamic_mutation_rate = MUTATION_RATE * self.temperature
+        
+        # Create a new schedule to mutate based on dynamic mutation rate
         schedule = Schedule().initialize()
+        
         for i in range(len(mutateSchedule.getClasses())):
-            if MUTATION_RATE > random.random():
+            # Use dynamic mutation rate to decide whether to mutate a class
+            if dynamic_mutation_rate > random.random():
                 mutateSchedule.getClasses()[i] = schedule.getClasses()[i]
+                
         return mutateSchedule
 
     def _tournamentPopulation(self, popula):
+        # Perform tournament selection to pick the best schedule
         tournamentPopula = Population(0)
 
+        # Select schedules for the tournament
         for i in range(0, TOURNAMENT_SELECTION_SIZE):
             tournamentPopula.getSchedules().append(
                 popula.getSchedules()[random.randrange(0, POPULATION_SIZE)])
 
-        # tournamentPopula.getSchedules().sort(key=lambda x: x.getFitness(),reverse=True)
-        # return tournamentPopula
+        # Return the schedule with the best fitness from the tournament
         return max(tournamentPopula.getSchedules(), key=lambda x: x.getFitness())
+
 
 
 
@@ -408,8 +498,16 @@ def apiterminateGens(request):
 
 
 
+from random import choice
 
+def get_random_color():
+    # Generate light colors by ensuring RGB values are higher than 200
+    r = random.randint(200, 255)
+    g = random.randint(200, 255)
+    b = random.randint(200, 255)
     
+    # Return the color in the hex format
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 
@@ -420,46 +518,78 @@ def timetable(request):
     population = Population(POPULATION_SIZE)
     VARS['generationNum'] = 0
     VARS['terminateGens'] = False
-    population.getSchedules().sort(key=lambda x: x.getFitness(), reverse=True)
+    populations = []  # Store all populations for metrics
+    populations.append(population)  # Add initial population
+    fitness_values = []  # Best fitness per generation
+    average_fitness = []  # Average fitness per generation
+    diversity = []  # Population diversity per generation (unique fitness values)
+    convergence_count = []  # Convergence count per generation
+    selection_values = []  # Selection pressure values per generation
+    mutation_effect = []  # Mutation impact on fitness
+    crossover_effect = []  # Crossover impact on fitness
+    elite_fitness = []  # Elite individual fitness
+
     geneticAlgorithm = GeneticAlgorithm()
     schedule = population.getSchedules()[0]
 
-    while (schedule.getFitness() != 1.0) and (VARS['generationNum'] <= 500):
+    while (schedule.getFitness() != 1.0) and (VARS['generationNum'] <= 150):
         if VARS['terminateGens']:
             return HttpResponse('')
 
         population = geneticAlgorithm.evolve(population)
         population.getSchedules().sort(key=lambda x: x.getFitness(), reverse=True)
         schedule = population.getSchedules()[0]
-        # print(schedule)
+        populations.append(population)  # Add current population
+        fitness_values.append(schedule.getFitness())  # Track best fitness
+
+        # Calculate average fitness
+        avg_fitness = sum(schedule.getFitness() for schedule in population.getSchedules()) / POPULATION_SIZE
+        average_fitness.append(avg_fitness)
+
+        # Calculate population diversity (unique fitness values)
+        unique_fitness = len(set(schedule.getFitness() for schedule in population.getSchedules()))
+        diversity.append(unique_fitness)
+
+        # Track convergence (e.g., number of schedules with fitness >= threshold)
+        convergence_count.append(sum(1 for s in population.getSchedules() if s.getFitness() >= 0.9))
+
+        # Track selection pressure (distribution of fitness values of selected parents)
+        selection_values.append([s.getFitness() for s in population.getSchedules()])
+
+        # Track mutation effect (how fitness changes after mutation)
+        mutation_effect.append(schedule.getFitness() - schedule.getFitness())  # Update with mutation fitness effect
+
+        # Track crossover effect (how fitness changes after crossover)
+        crossover_effect.append(schedule.getFitness() - schedule.getFitness())  # Update with crossover fitness effect
+
+        # Track elite retention (fitness of elite individuals)
+        elite_fitness.append(schedule.getFitness())
+
         VARS['generationNum'] += 1
-        # for c in schedule.getClasses():
-        #     print(c.course.course_name, c.meeting_time)
-        fitness_values.append(schedule.getFitness())
         print(f'\n> Generation #{VARS["generationNum"]}, Fitness: {schedule.getFitness()}')
 
-    plt.figure(figsize=(10, 5))  # Optional: Set figure size for better visualization
-    plt.plot(range(len(fitness_values)), fitness_values)
-    plt.title('Fitness Over Generations')
-    plt.xlabel('Generation Number')
-    plt.ylabel('Fitness')
-    plt.grid(True)
+    # Generate Combined Graph
+    generate_combined_plots(fitness_values, average_fitness, diversity, population_size=POPULATION_SIZE, mutation_rate=MUTATION_RATE)
 
-    # Save the plot as an image file
-    plot_path = os.path.join(settings.MEDIA_ROOT, 'fitness_plot_300_population.png')
-    plt.savefig(plot_path)
-    plt.close()
-# Define the break time slot
+
     break_time_slot = '10:00 - 10:50'  # The break time you want to use
     week_days = ['Sunday','Monday', 'Tuesday', 'Wednesday', 'Thursday']  # List of weekdays
+    
+    teacher_colors = {}
+    instructor_names = {}
+
+    for cls in schedule.getClasses():
+        teacher = cls.get_instructor()  # Assuming this is an instructor object
+        teacher_name = teacher.name  # Ensure you're getting the correct name attribute of the instructor
+        
+        if teacher_name not in teacher_colors:
+            teacher_colors[teacher_name] = get_random_color()
+        
+        # Now you can store the instructor's name (or ID) for reference
+        instructor_names[cls] = teacher_name
 
     # Generate break times for all weekdays
     break_times = [(break_time_slot, day) for day in week_days]
-    # print(f'Schedule: {schedule.getClasses()}')
-    # print(f'Sections: {data.get_sections()}')
-    # print(f'Time Slots: {TIME_SLOTS}')
-    # print(f'Week Days: {DAYS_OF_WEEK}')
-
 
     return render(
         request, 'timetable.html', {
@@ -469,7 +599,49 @@ def timetable(request):
             'timeSlots': TIME_SLOTS,
             'weekDays': DAYS_OF_WEEK,
             'break_times': break_times,
+            'teacher_colors': teacher_colors,
         })
+
+
+def generate_combined_plots(fitness_values, average_fitness, diversity, population_size, mutation_rate):
+    # Create a single figure with 3 subplots (since you only want the first 3 graphs)
+    fig, axs = plt.subplots(3, 1, figsize=(10, 12))  # Adjusting the layout for 3 subplots
+
+    # Best and Average Fitness Plot
+    axs[0].plot(range(len(fitness_values)), fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
+    axs[0].plot(range(len(average_fitness)), average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
+    axs[0].set_title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate} with annealing mutation')
+    axs[0].set_xlabel('Generation Number')
+    axs[0].set_ylabel('Fitness')
+    axs[0].grid(True)
+    axs[0].legend()
+
+    # Fitness Improvement Plot (Best - Average)
+    fitness_improvement = [best - avg for best, avg in zip(fitness_values, average_fitness)]
+    axs[1].plot(range(len(fitness_improvement)), fitness_improvement, label='Fitness Improvement (Best - Average)', color='purple', linestyle='-', marker='s')
+    axs[1].set_title(f'Fitness Improvement Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
+    axs[1].set_xlabel('Generation Number')
+    axs[1].set_ylabel('Fitness Difference')
+    axs[1].grid(True)
+    axs[1].legend()
+
+    # Diversity Plot
+    axs[2].plot(range(len(diversity)), diversity, label='Diversity', color='green', linestyle='-', marker='d')
+    axs[2].set_title(f'Diversity Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
+    axs[2].set_xlabel('Generation Number')
+    axs[2].set_ylabel('Diversity')
+    axs[2].grid(True)
+    axs[2].legend()
+
+    # Adjust layout and save the combined plot
+    plt.tight_layout()
+    plt.savefig(os.path.join(settings.MEDIA_ROOT, 'combined_three_100_withannealing.png'))
+    plt.close()
+
+
+
+
+
 
 
 '''

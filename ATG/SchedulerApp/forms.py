@@ -73,9 +73,9 @@ class MeetingTimeForm(ModelForm):
 class CourseForm(ModelForm):
     class Meta:
         model = Course
-        labels = {'max_numb_students': 'Maximum students'}
+        # labels = {'max_numb_students': 'Maximum students'}
         fields = [
-            'course_number', 'course_name', 'max_numb_students', 'instructors'
+            'course_number', 'course_name', 'max_period', 'instructors'
         ]
 
 
