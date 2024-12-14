@@ -16,8 +16,8 @@ from django.conf import settings
 
 POPULATION_SIZE = 100
 NUMB_OF_ELITE_SCHEDULES = 10
-TOURNAMENT_SELECTION_SIZE = 5
-MUTATION_RATE = 0.1
+TOURNAMENT_SELECTION_SIZE = 15
+MUTATION_RATE = 0.01
 VARS = {'generationNum': 0,
         'terminateGens': False}
 
@@ -146,6 +146,19 @@ class Schedule:
             crs_inst[random.randrange(0, len(crs_inst))])
 
         self._classes.append(newClass)
+    def getGenes(self):
+        """Returns a list of dictionaries representing the genes (classes) in the schedule."""
+        return [
+            {
+                "department": cls.get_dept(),
+                "course": cls.get_course(),
+                "instructor": cls.get_instructor(),
+                "meeting_time": cls.get_meetingTime(),
+                "room": cls.get_room(),
+                "section": cls.section,
+            }
+            for cls in self._classes
+        ]
 
     def initialize(self):
         sections = Section.objects.all()
@@ -435,24 +448,15 @@ class GeneticAlgorithm:
                 crossoverSchedule.getClasses()[i] = scheduleY.getClasses()[i]
         return crossoverSchedule
 
-    def _mutateSchedule(self, mutateSchedule):
-        # Simulated Annealing based mutation
 
-        # Decrease temperature over generations
-        self.temperature *= self.cooling_rate
-        
-        # Calculate dynamic mutation rate based on temperature
-        dynamic_mutation_rate = MUTATION_RATE * self.temperature
-        
-        # Create a new schedule to mutate based on dynamic mutation rate
-        schedule = Schedule().initialize()
-        
-        for i in range(len(mutateSchedule.getClasses())):
-            # Use dynamic mutation rate to decide whether to mutate a class
-            if dynamic_mutation_rate > random.random():
-                mutateSchedule.getClasses()[i] = schedule.getClasses()[i]
-                
-        return mutateSchedule
+    def _mutateSchedule(self, mutateSchedule):
+        schedule = Schedule().initialize()  # Create a new Schedule and initialize it
+        for i in range(len(mutateSchedule.getClasses())):  # Iterate over the classes in the schedule
+            if MUTATION_RATE > random.random():  # If the random value is less than the mutation rate
+                mutateSchedule.getClasses()[i] = schedule.getClasses()[i]  # Replace the class at index i with a class from the new schedule
+        return mutateSchedule  # Return the mutated schedule
+
+
 
     def _tournamentPopulation(self, popula):
         # Perform tournament selection to pick the best schedule
@@ -523,11 +527,6 @@ def timetable(request):
     fitness_values = []  # Best fitness per generation
     average_fitness = []  # Average fitness per generation
     diversity = []  # Population diversity per generation (unique fitness values)
-    convergence_count = []  # Convergence count per generation
-    selection_values = []  # Selection pressure values per generation
-    mutation_effect = []  # Mutation impact on fitness
-    crossover_effect = []  # Crossover impact on fitness
-    elite_fitness = []  # Elite individual fitness
 
     geneticAlgorithm = GeneticAlgorithm()
     schedule = population.getSchedules()[0]
@@ -550,23 +549,10 @@ def timetable(request):
         unique_fitness = len(set(schedule.getFitness() for schedule in population.getSchedules()))
         diversity.append(unique_fitness)
 
-        # Track convergence (e.g., number of schedules with fitness >= threshold)
-        convergence_count.append(sum(1 for s in population.getSchedules() if s.getFitness() >= 0.9))
-
-        # Track selection pressure (distribution of fitness values of selected parents)
-        selection_values.append([s.getFitness() for s in population.getSchedules()])
-
-        # Track mutation effect (how fitness changes after mutation)
-        mutation_effect.append(schedule.getFitness() - schedule.getFitness())  # Update with mutation fitness effect
-
-        # Track crossover effect (how fitness changes after crossover)
-        crossover_effect.append(schedule.getFitness() - schedule.getFitness())  # Update with crossover fitness effect
-
-        # Track elite retention (fitness of elite individuals)
-        elite_fitness.append(schedule.getFitness())
-
         VARS['generationNum'] += 1
+        genes = schedule.getGenes()  # Assumes the getGenes() method exists in the Schedule class
         print(f'\n> Generation #{VARS["generationNum"]}, Fitness: {schedule.getFitness()}')
+        print(f'Genes of Best Schedule: {genes}')
 
     # Generate Combined Graph
     generate_combined_plots(fitness_values, average_fitness, diversity, population_size=POPULATION_SIZE, mutation_rate=MUTATION_RATE)
@@ -610,9 +596,9 @@ def generate_combined_plots(fitness_values, average_fitness, diversity, populati
     # Best and Average Fitness Plot
     axs[0].plot(range(len(fitness_values)), fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
     axs[0].plot(range(len(average_fitness)), average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
-    axs[0].set_title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate} with annealing mutation')
+    axs[0].set_title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate} with big tournament size')
     axs[0].set_xlabel('Generation Number')
-    axs[0].set_ylabel('Fitness')
+    axs[0].set_ylabel('Fitness') 
     axs[0].grid(True)
     axs[0].legend()
 
@@ -635,7 +621,7 @@ def generate_combined_plots(fitness_values, average_fitness, diversity, populati
 
     # Adjust layout and save the combined plot
     plt.tight_layout()
-    plt.savefig(os.path.join(settings.MEDIA_ROOT, 'combined_three_100_withannealing.png'))
+    plt.savefig(os.path.join(settings.MEDIA_ROOT, 'combined_three_100_withsbittournament_size.png'))
     plt.close()
 
 
