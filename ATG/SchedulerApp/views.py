@@ -1,3 +1,4 @@
+import copy
 from django.http.response import HttpResponse
 from django.shortcuts import render, redirect
 from django.http import JsonResponse
@@ -12,11 +13,13 @@ import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 import os
+import pandas as pd
 from django.conf import settings
+import math
 
 POPULATION_SIZE = 100
 NUMB_OF_ELITE_SCHEDULES = 10
-TOURNAMENT_SELECTION_SIZE = 15
+TOURNAMENT_SELECTION_SIZE = 20
 MUTATION_RATE = 0.01
 VARS = {'generationNum': 0,
         'terminateGens': False}
@@ -24,21 +27,23 @@ VARS = {'generationNum': 0,
 
 fitness_values = []
 
+
+
 class Population:
-    def __init__(self, size):
+    def __init__(self,size):
         self._size = size
-        # self._data = data
+        self._data = data
         self._schedules = [Schedule().initialize() for i in range(size)]
 
     def getSchedules(self):
         return self._schedules
+    
     
     def __str__(self):
         # Create a string representation of the Population
         schedule_descriptions = [str(schedule) for schedule in self._schedules]
         return (f"Population Size: {self._size}\n"
                 f"Schedules: \n" + "\n".join(schedule_descriptions))
-    
     
 
 
@@ -68,7 +73,6 @@ class Data:
 
     def get_sections(self):
         return self._sections
-
 
 class Class:
     def __init__(self, dept, section, course):
@@ -105,6 +109,21 @@ class Class:
 
     def set_room(self, room):
         self.room = room
+    
+    def generate_neighbor(self):
+        # Create a copy of the current schedule
+        neighbor = copy.deepcopy(self)
+
+        # Randomly select a class and change its time or instructor
+        random_class = random.choice(neighbor.get_dept())
+        random_time = random.choice(neighbor.get_meetingTime())
+        random_instructor = random.choice(neighbor.get_instructor())
+
+        # Set the new time and instructor
+        self.set_meetingTime(random_class, random_time)
+        self.set_instructor(random_class, random_instructor)
+
+        return neighbor
         
     def __str__(self):
         return f"Class(dept={self.department}, course={self.course}, section={self.section}, instructor={self.instructor}, meeting_time={self.meeting_time}, room={self.room})"
@@ -146,19 +165,56 @@ class Schedule:
             crs_inst[random.randrange(0, len(crs_inst))])
 
         self._classes.append(newClass)
-    def getGenes(self):
-        """Returns a list of dictionaries representing the genes (classes) in the schedule."""
+
+    def getGenes(self, sample_size=1):
+        """Returns a random sample of genes (classes) in the schedule."""
+        # If you want a random sample, ensure there are enough genes to sample
+        if len(self._classes) <= sample_size:
+            return [
+                {
+                    "department": cls.get_dept(),
+                    "course": cls.get_course(),
+                    "instructor": cls.get_instructor(),
+                    "meeting_time": cls.get_meetingTime(),
+                    "section": cls.section,
+                }
+                for cls in self._classes
+            ]
+        
+        # Randomly sample 'sample_size' number of genes (classes)
+        sampled_classes = random.sample(self._classes, sample_size)
+        
         return [
             {
                 "department": cls.get_dept(),
                 "course": cls.get_course(),
                 "instructor": cls.get_instructor(),
                 "meeting_time": cls.get_meetingTime(),
-                "room": cls.get_room(),
                 "section": cls.section,
             }
-            for cls in self._classes
+            for cls in sampled_classes
         ]
+    def generate_neighbor(self):
+        # Create a copy of the current schedule
+        neighbor_schedule = copy.deepcopy(self)
+
+        # Randomly select a class from the current schedule
+        random_class = random.choice(neighbor_schedule.getClasses())
+
+        # Randomly select new attributes for the class (e.g., room, instructor, meeting time)
+        new_room = random.choice(self._data.get_depts())
+        new_instructor = random.choice(self._data.get_instructors())
+        new_meeting_time = random.choice(self._data.get_meetingTimes())
+
+        # Modify the class's attributes
+        random_class.set_room(new_room)
+        random_class.set_instructor(new_instructor)
+        random_class.set_meetingTime(new_meeting_time)
+
+        # Mark the fitness as changed since the schedule has been altered
+        neighbor_schedule._isFitnessChanged = True
+
+        return neighbor_schedule
 
     def initialize(self):
         sections = Section.objects.all()
@@ -206,6 +262,7 @@ class Schedule:
         return datetime.strptime(time_str.strip(), '%H:%M').time()
 
 
+
     def calculateFitness(self):
         # Dictionaries to track violations for each constraint
         self._hard_constraint_violations = {
@@ -231,12 +288,12 @@ class Schedule:
             'duplicate_time_section': 3,
             'instructor_availability': 3,
             'total_classes_mismatch': 3,
-            'course_frequency': 5, 
+            'course_frequency': 3, 
         }
 
         soft_weights = {
             'no_consecutive_classes': 0.5,
-            'noon_classes': 3,
+            'noon_classes': 0.5,
             'break_time_conflict': 0.3,
             'balanced_days': 0.3,
         }
@@ -252,31 +309,47 @@ class Schedule:
             self.check_duplicate_time(classes, i, hard_weights)
             self.check_instructor_availability(classes, i, hard_weights)
         self.check_course_frequency(classes, hard_weights)
+
         # Check soft constraints
         for i in range(len(classes)):
             self.check_consecutive_classes(classes, i, soft_weights)
             self.check_noon_classes(classes, i, soft_weights)
             self.check_break_time_conflict(classes, i, soft_weights)
-            
+
         self.check_balanced_days(classes, soft_weights)
+
+        # Debugging Logs: Print Hard Constraint Violations
+        print("\n🚨 HARD CONSTRAINT VIOLATIONS 🚨")
+        for key, count in self._hard_constraint_violations.items():
+            penalty = hard_weights[key] * count
+            print(f"{key}: {count} violations → Penalty: {penalty}")
+
+        # Debugging Logs: Print Soft Constraint Violations
+        print("\n⚠️ SOFT CONSTRAINT VIOLATIONS ⚠️")
+        for key, count in self._soft_constraint_violations.items():
+            penalty = soft_weights[key] * count
+            print(f"{key}: {count} violations → Penalty: {penalty}")
+
         # Calculate penalties
-        hard_penalty = sum(
-            hard_weights[key] * self._hard_constraint_violations[key] for key in hard_weights
-        )
-        soft_penalty = sum(
-            soft_weights[key] * self._soft_constraint_violations[key] for key in soft_weights
-        )
-        
+        hard_penalty = sum(hard_weights[key] * self._hard_constraint_violations[key] for key in hard_weights)
+        soft_penalty = sum(soft_weights[key] * self._soft_constraint_violations[key] for key in soft_weights)
+
+        # Normalize penalties using total weight sum
         hard_penalty /= max(1, len(hard_weights))  # Prevent division by zero
         soft_penalty /= max(1, len(soft_weights))
-        
-        print(f"Hard Penalty: {hard_penalty}")  # Debug print
-        print(f"Soft Penalty: {soft_penalty}")
-        
-        # Calculate fitness using the given formula
-        total_penalty = soft_penalty + (hard_penalty ** 2)
-        fitness = (1+10)/(total_penalty+1)
-        print(f"Fitness: {fitness}") 
+
+        # Final Debugging Output
+        print("\n🔹 PENALTY SUMMARY 🔹")
+        print(f"Total Hard Penalty: {hard_penalty}")
+        print(f"Total Soft Penalty: {soft_penalty}")
+
+        # Calculate fitness using exponential decay
+        # alpha = 0.1  # Tuning factor for decay rate
+        total_penalty = hard_penalty + soft_penalty
+        fitness = 1/(1+total_penalty)
+
+        print(f"\n✅ FINAL FITNESS SCORE: {fitness}")
+
         # Assign fitness value to the schedule
         self._fitness = fitness
         return self._fitness
@@ -354,7 +427,7 @@ class Schedule:
             if (classes[i].section == classes[j].section and 
                 classes[i].meeting_time == classes[j].meeting_time):
                 self._hard_constraint_violations['duplicate_time_section'] += 1
-
+                
     def check_instructor_availability(self, classes, i, weights):
         instructor = classes[i].instructor
         availability_start = instructor.availability_start
@@ -364,8 +437,17 @@ class Schedule:
         start_time = self.parse_time(start_time_str)
         end_time = self.parse_time(end_time_str)
 
+        # Debugging Output
+        # print(f"\n🔍 Checking Availability for Instructor: {instructor.name}")
+        # print(f"➡️ Instructor Availability: {availability_start} - {availability_end}")
+        # print(f"➡️ Class Time: {start_time} - {end_time}")
+
         if start_time < availability_start or end_time > availability_end:
+            # print("❌ Instructor is not available during this time slot!")
             self._hard_constraint_violations['instructor_availability'] += 1
+        # else:
+        #     print("✅ Instructor is available!")
+
 
     def check_consecutive_classes(self, classes, i, weights):
         for j in range(i + 1, len(classes)):
@@ -406,9 +488,28 @@ class Schedule:
         min_day = min(day_class_count.values())
         if max_day - min_day > 2:
             self._soft_constraint_violations['balanced_days'] += 1
+    
+    def __str__(self):
+        # Create a string representation of the Schedule (chromosome)
+        schedule_str = "Schedule (Chromosome):\n"
+        for cls in self._classes:
+            schedule_str += f"Course: {cls.get_course()} | Instructor: {cls.get_instructor()} | " \
+                            f"| Time: {cls.get_meetingTime()} | Section: {cls.section}\n"
+
+        # Add a sample of the genes to the representation
+        genes_str = "Sample Genes:\n"
+        sample_genes = self.getGenes(sample_size=3)  # You can change the sample size here
+        for gene in sample_genes:
+            genes_str += f"Department: {gene['department']} | " \
+                         f"Course: {gene['course']} | Instructor: {gene['instructor']} | " \
+                         f"Meeting Time: {gene['meeting_time']} | | Section: {gene['section']}\n"
+
+        return schedule_str + "\n" + genes_str
 
 
-
+# data = Data()
+# population = Population(size=3,data=data)
+# print(population)
 class GeneticAlgorithm:
     def __init__(self, initial_temperature=1.0, cooling_rate=0.99):
         self.temperature = initial_temperature  # Initial temperature for mutation
@@ -472,6 +573,58 @@ class GeneticAlgorithm:
 
 
 
+# def simulated_annealing(schedule, max_iterations, initial_temp, cooling_rate):
+#     import math
+#     import random
+
+#     # Initialize the current schedule and its fitness
+#     current_schedule = schedule
+#     current_fitness = current_schedule.getFitness()
+
+#     # Initialize the best schedule as the current schedule
+#     best_schedule = current_schedule
+#     best_fitness = current_fitness
+
+#     # Set the initial temperature
+#     temperature = initial_temp
+
+#     # Perform the simulated annealing process
+#     for iteration in range(max_iterations):
+#         # Generate a neighbor schedule
+#         neighbor_schedule = current_schedule.generate_neighbor()  # Assuming generate_neighbor is already implemented
+#         neighbor_fitness = neighbor_schedule.getFitness()
+
+#         # Calculate the fitness difference
+#         delta_fitness = neighbor_fitness - current_fitness
+
+#         # Calculate acceptance probability
+#         if delta_fitness > 0:
+#             acceptance_probability = 1.0
+#         else:
+#             acceptance_probability = math.exp(delta_fitness / temperature)
+
+#         # Accept or reject the neighbor based on probability
+#         if acceptance_probability > random.random():
+#             current_schedule = neighbor_schedule
+#             current_fitness = neighbor_fitness
+
+#         # Update the best schedule if the current one is better
+#         if current_fitness > best_fitness:
+#             best_schedule = current_schedule
+#             best_fitness = current_fitness
+
+#         # Cool down the temperature
+#         temperature *= cooling_rate
+
+#         # Print the current status of the process
+#         print(f"Iteration {iteration + 1}: Fitness = {current_fitness}, Best Fitness = {best_fitness}, Temperature = {temperature}")
+
+#         # Stop early if an optimal solution is found
+#         if best_fitness == 1.0:
+#             break
+
+#     return best_schedule
+
 
 def context_manager(schedule):
     classes = schedule.getClasses()
@@ -498,7 +651,6 @@ def apiGenNum(request):
 def apiterminateGens(request):
     VARS['terminateGens'] = True
     return redirect('home')
-
 
 
 
@@ -529,9 +681,10 @@ def timetable(request):
     diversity = []  # Population diversity per generation (unique fitness values)
 
     geneticAlgorithm = GeneticAlgorithm()
+    population.getSchedules().sort(key=lambda x: x.getFitness(), reverse=True)
     schedule = population.getSchedules()[0]
 
-    while (schedule.getFitness() != 1.0) and (VARS['generationNum'] <= 150):
+    while (schedule.getFitness() != 1.0) and (VARS['generationNum'] <= 100):
         if VARS['terminateGens']:
             return HttpResponse('')
 
@@ -553,9 +706,15 @@ def timetable(request):
         genes = schedule.getGenes()  # Assumes the getGenes() method exists in the Schedule class
         print(f'\n> Generation #{VARS["generationNum"]}, Fitness: {schedule.getFitness()}')
         print(f'Genes of Best Schedule: {genes}')
+         # Fine-tune using Simulated Annealing
+    #     max_iterations = 100
+    #     initial_temp = 1000
+    #     cooling_rate = 0.95
+    #     refined_schedule = simulated_annealing(schedule, max_iterations, initial_temp, cooling_rate)
+    # print(refined_schedule)
 
     # Generate Combined Graph
-    generate_combined_plots(fitness_values, average_fitness, diversity, population_size=POPULATION_SIZE, mutation_rate=MUTATION_RATE)
+    generate_individual_plots(fitness_values, average_fitness, diversity, population_size=POPULATION_SIZE, mutation_rate=MUTATION_RATE)
 
 
     break_time_slot = '10:00 - 10:50'  # The break time you want to use
@@ -589,40 +748,65 @@ def timetable(request):
         })
 
 
-def generate_combined_plots(fitness_values, average_fitness, diversity, population_size, mutation_rate):
-    # Create a single figure with 3 subplots (since you only want the first 3 graphs)
-    fig, axs = plt.subplots(3, 1, figsize=(10, 12))  # Adjusting the layout for 3 subplots
 
-    # Best and Average Fitness Plot
-    axs[0].plot(range(len(fitness_values)), fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
-    axs[0].plot(range(len(average_fitness)), average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
-    axs[0].set_title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate} with big tournament size')
-    axs[0].set_xlabel('Generation Number')
-    axs[0].set_ylabel('Fitness') 
-    axs[0].grid(True)
-    axs[0].legend()
-
-    # Fitness Improvement Plot (Best - Average)
-    fitness_improvement = [best - avg for best, avg in zip(fitness_values, average_fitness)]
-    axs[1].plot(range(len(fitness_improvement)), fitness_improvement, label='Fitness Improvement (Best - Average)', color='purple', linestyle='-', marker='s')
-    axs[1].set_title(f'Fitness Improvement Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
-    axs[1].set_xlabel('Generation Number')
-    axs[1].set_ylabel('Fitness Difference')
-    axs[1].grid(True)
-    axs[1].legend()
-
-    # Diversity Plot
-    axs[2].plot(range(len(diversity)), diversity, label='Diversity', color='green', linestyle='-', marker='d')
-    axs[2].set_title(f'Diversity Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
-    axs[2].set_xlabel('Generation Number')
-    axs[2].set_ylabel('Diversity')
-    axs[2].grid(True)
-    axs[2].legend()
-
-    # Adjust layout and save the combined plot
-    plt.tight_layout()
-    plt.savefig(os.path.join(settings.MEDIA_ROOT, 'combined_three_100_withsbittournament_size.png'))
+def generate_individual_plots(fitness_values, average_fitness, diversity, population_size, mutation_rate):
+    # Generate Best and Average Fitness Plot
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(len(fitness_values)), fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
+    plt.plot(range(len(average_fitness)), average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
+    plt.title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
+    plt.xlabel('Generation Number')
+    plt.ylabel('Fitness')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(os.path.join(settings.MEDIA_ROOT, 'best_and_average_fitness.png'))
     plt.close()
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(len(fitness_values)), fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
+    plt.plot(range(len(average_fitness)), average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
+    plt.title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate} for Tournament selection')
+    plt.xlabel('Generation Number')
+    plt.ylabel('Fitness')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(os.path.join(settings.MEDIA_ROOT, 'best_and_average_fitness_tournament.png'))
+    plt.close()
+
+    # # Generate Fitness Improvement Plot (Best - Average)
+    # fitness_improvement = [best - avg for best, avg in zip(fitness_values, average_fitness)]
+    # plt.figure(figsize=(10, 6))
+    # plt.plot(range(len(fitness_improvement)), fitness_improvement, label='Fitness Improvement (Best - Average)', color='purple', linestyle='-', marker='s')
+    # plt.title(f'Fitness Improvement Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
+    # plt.xlabel('Generation Number')
+    # plt.ylabel('Fitness Difference')
+    # plt.grid(True)
+    # plt.legend()
+    # plt.savefig(os.path.join(settings.MEDIA_ROOT, 'fitness_improvement.png'))
+    # plt.close()
+
+    # # Generate Diversity Plot
+    # plt.figure(figsize=(10, 6))
+    # plt.plot(range(len(diversity)), diversity, label='Diversity', color='green', linestyle='-', marker='d')
+    # plt.title(f'Diversity Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
+    # plt.xlabel('Generation Number')
+    # plt.ylabel('Diversity')
+    # plt.grid(True)
+    # plt.legend()
+    # plt.savefig(os.path.join(settings.MEDIA_ROOT, 'diversity_over_generations.png'))
+    # plt.close()
+
+    # Create a table with the results (fitness, improvement, and diversity for each generation)
+    data = {
+        'Generation Number': list(range(len(fitness_values))),
+        'Best Fitness': fitness_values,
+        'Average Fitness': average_fitness,
+        'Fitness Improvement': [best - avg for best, avg in zip(fitness_values, average_fitness)],
+        'Diversity': diversity
+    }
+    df = pd.DataFrame(data)
+    df.to_csv(os.path.join(settings.MEDIA_ROOT, 'fitness_summary_table.csv'), index=False)
+
 
 
 
@@ -819,3 +1003,63 @@ def error_404(request, exception):
 
 def error_500(request, *args, **argv):
     return render(request,'errors/500.html', {})
+
+# import itertools
+# import time
+
+# # Define possible values for each hyperparameter
+# population_sizes = [50, 100, 200]  # Example values for population size
+# elite_sizes = [5, 10, 20]         # Example values for number of elite schedules
+# mutation_rates = [0.01, 0.05, 0.1]  # Example mutation rates
+# tournament_sizes = [5, 10, 20]     # Example tournament selection sizes
+
+# # Create all possible combinations of the hyperparameters
+# hyperparameter_combinations = itertools.product(population_sizes, elite_sizes, mutation_rates, tournament_sizes)
+
+# # Grid search loop
+# for population_size, elite_size, mutation_rate, tournament_size in hyperparameter_combinations:
+    
+#     # Set the hyperparameters for the current iteration
+#     POPULATION_SIZE = population_size
+#     NUMB_OF_ELITE_SCHEDULES = elite_size
+#     MUTATION_RATE = mutation_rate
+#     TOURNAMENT_SELECTION_SIZE = tournament_size
+
+#     # Create population and genetic algorithm with the current hyperparameters
+#     data = Data()
+#     population = Population(POPULATION_SIZE)
+#     geneticAlgorithm = GeneticAlgorithm()
+
+#     # Track the best fitness and time taken to reach solution
+#     best_fitness = 0
+#     start_time = time.time()  # Track start time
+
+#     # Evolve population over generations
+#     for generation in range(3):
+#         population = geneticAlgorithm.evolve(population)
+#         best_schedule = population.getSchedules()[0]  # Get best schedule (highest fitness)
+#         fitness = best_schedule.getFitness()
+
+#         # Track the best fitness for the current hyperparameter combination
+#         if fitness > best_fitness:
+#             best_fitness = fitness
+
+#         # Stop the evolution if fitness reaches 1.0
+#         if fitness == 1.0:
+#             end_time = time.time()  # Track end time when solution is found
+#             time_taken = end_time - start_time  # Calculate time taken
+#             break
+#     else:
+#         # If the loop completes without reaching fitness 1.0, use time taken until the last generation
+#         end_time = time.time()
+#         time_taken = end_time - start_time
+
+#     # Print the results of this grid search iteration
+#     print(f"Grid Search Iteration Results:")
+#     print(f"Population Size: {POPULATION_SIZE}")
+#     print(f"Elite Schedules: {NUMB_OF_ELITE_SCHEDULES}")
+#     print(f"Mutation Rate: {MUTATION_RATE}")
+#     print(f"Tournament Selection Size: {TOURNAMENT_SELECTION_SIZE}")
+#     print(f"Best Fitness: {best_fitness}")
+#     print(f"Time Taken to Reach Solution: {time_taken:.2f} seconds")
+#     print('-' * 40)

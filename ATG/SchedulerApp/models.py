@@ -94,19 +94,19 @@ class Section(models.Model):
                                      on_delete=models.CASCADE,
                                      blank=True,
                                      null=True)
-    room = models.ForeignKey(Room,
-                             on_delete=models.CASCADE,
-                             blank=True,
-                             null=True)
+    # room = models.ForeignKey(Room,
+    #                          on_delete=models.CASCADE,
+    #                          blank=True,
+    #                          null=True)
     instructor = models.ForeignKey(Instructor,
                                    on_delete=models.CASCADE,
                                    blank=True,
                                    null=True)
 
-    def set_room(self, room):
-        section = Section.objects.get(pk=self.section_id)
-        section.room = room
-        section.save()
+    # def set_room(self, room):
+    #     section = Section.objects.get(pk=self.section_id)
+    #     section.room = room
+    #     section.save()
 
     def set_meetingTime(self, meetingTime):
         section = Section.objects.get(pk=self.section_id)
