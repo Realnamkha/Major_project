@@ -18,9 +18,9 @@ from django.conf import settings
 import math
 
 POPULATION_SIZE = 100
-NUMB_OF_ELITE_SCHEDULES = 10
+NUMB_OF_ELITE_SCHEDULES = 30
 TOURNAMENT_SELECTION_SIZE = 20
-MUTATION_RATE = 0.01
+MUTATION_RATE = 0.1
 VARS = {'generationNum': 0,
         'terminateGens': False}
 
@@ -294,8 +294,8 @@ class Schedule:
         soft_weights = {
             'no_consecutive_classes': 0.5,
             'noon_classes': 0.5,
-            'break_time_conflict': 0.3,
-            'balanced_days': 0.3,
+            'break_time_conflict': 0.5,
+            'balanced_days': 0.5,
         }
 
         # Retrieve all scheduled classes
@@ -335,8 +335,8 @@ class Schedule:
         soft_penalty = sum(soft_weights[key] * self._soft_constraint_violations[key] for key in soft_weights)
 
         # Normalize penalties using total weight sum
-        hard_penalty /= max(1, len(hard_weights))  # Prevent division by zero
-        soft_penalty /= max(1, len(soft_weights))
+        hard_penalty /= max(1, sum(hard_weights.values()))  
+        soft_penalty /= max(1, sum(soft_weights.values())) 
 
         # Final Debugging Output
         print("\n🔹 PENALTY SUMMARY 🔹")
@@ -344,9 +344,10 @@ class Schedule:
         print(f"Total Soft Penalty: {soft_penalty}")
 
         # Calculate fitness using exponential decay
-        # alpha = 0.1  # Tuning factor for decay rate
         total_penalty = hard_penalty + soft_penalty
-        fitness = 1/(1+total_penalty)
+        # Calculate fitness using exponential decay
+        alpha = 0.05
+        fitness = math.exp(-alpha * total_penalty)
 
         print(f"\n✅ FINAL FITNESS SCORE: {fitness}")
 
@@ -458,7 +459,7 @@ class Schedule:
                     self._soft_constraint_violations['no_consecutive_classes'] += 1
 
     def check_noon_classes(self, classes, i, weights):
-        noon_start = self.parse_time('10:00')
+        noon_start = self.parse_time('12:00')
         noon_end = self.parse_time('15:00')
         start_time_str, _ = classes[i].meeting_time.time.split(' - ')
         start_time = self.parse_time(start_time_str)
@@ -510,6 +511,7 @@ class Schedule:
 # data = Data()
 # population = Population(size=3,data=data)
 # print(population)
+
 class GeneticAlgorithm:
     def __init__(self, initial_temperature=1.0, cooling_rate=0.99):
         self.temperature = initial_temperature  # Initial temperature for mutation
@@ -525,10 +527,10 @@ class GeneticAlgorithm:
         for i in range(NUMB_OF_ELITE_SCHEDULES):
             crossoverPopula.getSchedules().append(popula.getSchedules()[i])
 
-        # Perform tournament selection and crossover for the rest of the population
+        # Perform SUS and crossover for the rest of the population
         for i in range(NUMB_OF_ELITE_SCHEDULES, POPULATION_SIZE):
-            scheduleX = self._tournamentPopulation(popula)
-            scheduleY = self._tournamentPopulation(popula)
+            scheduleX = self._susSelection(popula)
+            scheduleY = self._susSelection(popula)
             crossoverPopula.getSchedules().append(self._crossoverSchedule(scheduleX, scheduleY))
 
         return crossoverPopula
@@ -549,7 +551,6 @@ class GeneticAlgorithm:
                 crossoverSchedule.getClasses()[i] = scheduleY.getClasses()[i]
         return crossoverSchedule
 
-
     def _mutateSchedule(self, mutateSchedule):
         schedule = Schedule().initialize()  # Create a new Schedule and initialize it
         for i in range(len(mutateSchedule.getClasses())):  # Iterate over the classes in the schedule
@@ -557,19 +558,25 @@ class GeneticAlgorithm:
                 mutateSchedule.getClasses()[i] = schedule.getClasses()[i]  # Replace the class at index i with a class from the new schedule
         return mutateSchedule  # Return the mutated schedule
 
+    def _susSelection(self, popula):
+        # Perform Stochastic Universal Sampling (SUS) to select a schedule
+        total_fitness = sum(schedule.getFitness() for schedule in popula.getSchedules())
+        pointer_distance = total_fitness / POPULATION_SIZE
+        pointer = random.uniform(0, pointer_distance)  # Start pointer at a random position
 
+        selected_schedule = None
+        current_sum = 0
 
-    def _tournamentPopulation(self, popula):
-        # Perform tournament selection to pick the best schedule
-        tournamentPopula = Population(0)
+        # Spin the pointer across the population and select the schedule
+        for schedule in popula.getSchedules():
+            current_sum += schedule.getFitness()
+            if current_sum >= pointer:
+                selected_schedule = schedule
+                break
+            pointer += pointer_distance  # Move the pointer for the next schedule
 
-        # Select schedules for the tournament
-        for i in range(0, TOURNAMENT_SELECTION_SIZE):
-            tournamentPopula.getSchedules().append(
-                popula.getSchedules()[random.randrange(0, POPULATION_SIZE)])
+        return selected_schedule
 
-        # Return the schedule with the best fitness from the tournament
-        return max(tournamentPopula.getSchedules(), key=lambda x: x.getFitness())
 
 
 
@@ -665,7 +672,7 @@ def get_random_color():
     # Return the color in the hex format
     return f"#{r:02x}{g:02x}{b:02x}"
 
-
+import time
 
 @login_required
 def timetable(request):
@@ -683,8 +690,9 @@ def timetable(request):
     geneticAlgorithm = GeneticAlgorithm()
     population.getSchedules().sort(key=lambda x: x.getFitness(), reverse=True)
     schedule = population.getSchedules()[0]
+    start_time = time.time()  # Start time tracking
 
-    while (schedule.getFitness() != 1.0) and (VARS['generationNum'] <= 100):
+    while (schedule.getFitness() != 1.0) and (VARS['generationNum'] <= 2):
         if VARS['terminateGens']:
             return HttpResponse('')
 
@@ -712,9 +720,15 @@ def timetable(request):
     #     cooling_rate = 0.95
     #     refined_schedule = simulated_annealing(schedule, max_iterations, initial_temp, cooling_rate)
     # print(refined_schedule)
+    
+    end_time = time.time()  # End time tracking
+    execution_time_ms = round(end_time - start_time, 3) 
 
     # Generate Combined Graph
     generate_individual_plots(fitness_values, average_fitness, diversity, population_size=POPULATION_SIZE, mutation_rate=MUTATION_RATE)
+    
+    # Generate Final Table with Time and Diversity
+    generate_final_table(fitness_values, average_fitness, diversity, execution_time_ms, POPULATION_SIZE, MUTATION_RATE)
 
 
     break_time_slot = '10:00 - 10:50'  # The break time you want to use
@@ -748,12 +762,13 @@ def timetable(request):
         })
 
 
-
 def generate_individual_plots(fitness_values, average_fitness, diversity, population_size, mutation_rate):
-    # Generate Best and Average Fitness Plot
+    generations = list(range(len(fitness_values)))
+    
+    # Best and Average Fitness Plot
     plt.figure(figsize=(10, 6))
-    plt.plot(range(len(fitness_values)), fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
-    plt.plot(range(len(average_fitness)), average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
+    plt.plot(generations, fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
+    plt.plot(generations, average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
     plt.title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
     plt.xlabel('Generation Number')
     plt.ylabel('Fitness')
@@ -761,51 +776,135 @@ def generate_individual_plots(fitness_values, average_fitness, diversity, popula
     plt.legend()
     plt.savefig(os.path.join(settings.MEDIA_ROOT, 'best_and_average_fitness.png'))
     plt.close()
-    
+
+    # Diversity Graph
     plt.figure(figsize=(10, 6))
-    plt.plot(range(len(fitness_values)), fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
-    plt.plot(range(len(average_fitness)), average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
-    plt.title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate} for Tournament selection')
+    plt.plot(generations, diversity, label='Diversity (Unique Fitness Values)', color='green', linestyle='-', marker='s')
+    plt.title(f'Population Diversity Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
     plt.xlabel('Generation Number')
-    plt.ylabel('Fitness')
+    plt.ylabel('Unique Fitness Values')
     plt.grid(True)
     plt.legend()
-    plt.savefig(os.path.join(settings.MEDIA_ROOT, 'best_and_average_fitness_tournament.png'))
+    plt.savefig(os.path.join(settings.MEDIA_ROOT, 'diversity_graph.png'))
     plt.close()
 
-    # # Generate Fitness Improvement Plot (Best - Average)
-    # fitness_improvement = [best - avg for best, avg in zip(fitness_values, average_fitness)]
-    # plt.figure(figsize=(10, 6))
-    # plt.plot(range(len(fitness_improvement)), fitness_improvement, label='Fitness Improvement (Best - Average)', color='purple', linestyle='-', marker='s')
-    # plt.title(f'Fitness Improvement Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
-    # plt.xlabel('Generation Number')
-    # plt.ylabel('Fitness Difference')
-    # plt.grid(True)
-    # plt.legend()
-    # plt.savefig(os.path.join(settings.MEDIA_ROOT, 'fitness_improvement.png'))
-    # plt.close()
-
-    # # Generate Diversity Plot
-    # plt.figure(figsize=(10, 6))
-    # plt.plot(range(len(diversity)), diversity, label='Diversity', color='green', linestyle='-', marker='d')
-    # plt.title(f'Diversity Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
-    # plt.xlabel('Generation Number')
-    # plt.ylabel('Diversity')
-    # plt.grid(True)
-    # plt.legend()
-    # plt.savefig(os.path.join(settings.MEDIA_ROOT, 'diversity_over_generations.png'))
-    # plt.close()
-
-    # Create a table with the results (fitness, improvement, and diversity for each generation)
-    data = {
-        'Generation Number': list(range(len(fitness_values))),
-        'Best Fitness': fitness_values,
-        'Average Fitness': average_fitness,
-        'Fitness Improvement': [best - avg for best, avg in zip(fitness_values, average_fitness)],
-        'Diversity': diversity
+def generate_final_table(fitness_values, average_fitness, diversity, execution_time_ms, population_size, mutation_rate):
+    final_best_fitness = round(fitness_values[-1], 3)
+    final_avg_fitness = round(average_fitness[-1], 3)
+    final_diversity = diversity[-1]  # Last generation's diversity
+    
+    final_data = {
+        "Generation": ["100"],
+        "Population Size": [population_size],
+        "Mutation Rate": [mutation_rate],
+        "Best Fitness": [final_best_fitness],
+        "Average Fitness": [final_avg_fitness],
+        "Cross-Over":["Uniform Crossover"],
+        "Execution-Time(s)":[execution_time_ms]
     }
-    df = pd.DataFrame(data)
-    df.to_csv(os.path.join(settings.MEDIA_ROOT, 'fitness_summary_table.csv'), index=False)
+
+    df = pd.DataFrame(final_data)
+
+    # Save as CSV
+    df.to_csv(os.path.join(settings.MEDIA_ROOT, "final_fitness_data.csv"), index=False)
+
+    # Save as an HTML table
+    df.to_html(os.path.join(settings.MEDIA_ROOT, "uniform_data.html"), index=False)
+
+    # Generate Table Plot as an Image with better styling
+    fig, ax = plt.subplots(figsize=(10, 4))  # Increased width for readability
+    ax.set_title("Final Fitness Statistics", fontsize=14, fontweight="bold")
+    ax.axis("off")  # Hide axes
+
+    # Create Table with Better Styling
+    table = plt.table(
+        cellText=df.values, 
+        colLabels=df.columns, 
+        cellLoc='center', 
+        loc='center', 
+        colColours=["#4CAF50"] * len(df.columns)  # Header background color
+    )
+
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)  # Increased font size
+    table.scale(1.5, 1.5)  # Scale table for better visibility
+
+    plt.savefig(os.path.join(settings.MEDIA_ROOT, "100.png"), dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+# def generate_individual_plots(fitness_values, average_fitness, population_size, mutation_rate):
+#     generations = list(range(len(fitness_values)))
+    
+#     # Generate Best and Average Fitness Plot
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(generations, fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
+#     plt.plot(generations, average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
+#     plt.title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate}')
+#     plt.xlabel('Generation Number')
+#     plt.ylabel('Fitness')
+#     plt.grid(True)
+#     plt.legend()
+#     plt.savefig(os.path.join(settings.MEDIA_ROOT, 'best_and_average_fitness.png'))
+#     plt.close()
+
+#     # Generate Tournament Selection Plot
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(generations, fitness_values, label='Best Fitness', color='blue', linestyle='-', marker='o')
+#     plt.plot(generations, average_fitness, label='Average Fitness', color='orange', linestyle='--', marker='x')
+#     plt.title(f'Best and Average Fitness Over Generations\nPopulation: {population_size}, Mutation Rate: {mutation_rate} (Tournament Selection)')
+#     plt.xlabel('Generation Number')
+#     plt.ylabel('Fitness')
+#     plt.grid(True)
+#     plt.legend()
+#     plt.savefig(os.path.join(settings.MEDIA_ROOT, 'best_and_average_fitness_tournament.png'))
+#     plt.close()
+
+#     # Get Final Values (Last Generation)
+#     final_best_fitness = round(fitness_values[-1], 3)
+#     final_avg_fitness = round(average_fitness[-1], 3)
+    
+#     # Create a Table with Only Final Values
+#     final_data = {
+#         "Generation" : ["100"],
+#         "Population Size": [population_size],
+#         "Mutation Rate": [mutation_rate],
+#         "Best Fitness": [final_best_fitness],
+#         "Average Fitness": [final_avg_fitness],
+#         "Method": ["SUS selection"]
+#     }
+
+#     df = pd.DataFrame(final_data)
+
+#     # Save as CSV
+#     df.to_csv(os.path.join(settings.MEDIA_ROOT, "final_fitness_data.csv"), index=False)
+
+#     # Save as an HTML table
+#     df.to_html(os.path.join(settings.MEDIA_ROOT, "final_fitness_data.html"), index=False)
+
+#     # Generate Table Plot as an Image with better styling
+#     fig, ax = plt.subplots(figsize=(8, 3))  # Increased width for readability
+#     ax.set_title("Final Fitness Statistics", fontsize=14, fontweight="bold")
+#     ax.axis("off")  # Hide axes
+
+#     # Create Table with Better Styling
+#     table = plt.table(
+#         cellText=df.values, 
+#         colLabels=df.columns, 
+#         cellLoc='center', 
+#         loc='center', 
+#         colColours=["#4CAF50"] * len(df.columns)  # Header background color
+#     )
+
+#     table.auto_set_font_size(False)
+#     table.set_fontsize(12)  # Increased font size
+#     table.scale(1.5, 1.5)  # Scale table for better visibility
+
+#     plt.savefig(os.path.join(settings.MEDIA_ROOT, "sus_table.png"), dpi=300, bbox_inches="tight")
+#     plt.close()
+
+#     return "Plots and final table generated successfully!"
+
 
 
 
@@ -1008,22 +1107,22 @@ def error_500(request, *args, **argv):
 # import time
 
 # # Define possible values for each hyperparameter
-# population_sizes = [50, 100, 200]  # Example values for population size
-# elite_sizes = [5, 10, 20]         # Example values for number of elite schedules
-# mutation_rates = [0.01, 0.05, 0.1]  # Example mutation rates
-# tournament_sizes = [5, 10, 20]     # Example tournament selection sizes
+# population_sizes = [10, 20]  # Example values for population size
+# mutation_rates = [0.01, 0.05]  # Example mutation rates
 
 # # Create all possible combinations of the hyperparameters
-# hyperparameter_combinations = itertools.product(population_sizes, elite_sizes, mutation_rates, tournament_sizes)
+# hyperparameter_combinations = itertools.product(population_sizes, mutation_rates)
+
+# # Print table header
+# print(f"{'Population Size':<20}{'Mutation Rate':<15}{'Time Taken (s)'}")
+# print('-' * 50)
 
 # # Grid search loop
-# for population_size, elite_size, mutation_rate, tournament_size in hyperparameter_combinations:
+# for population_size, mutation_rate in hyperparameter_combinations:
     
 #     # Set the hyperparameters for the current iteration
 #     POPULATION_SIZE = population_size
-#     NUMB_OF_ELITE_SCHEDULES = elite_size
 #     MUTATION_RATE = mutation_rate
-#     TOURNAMENT_SELECTION_SIZE = tournament_size
 
 #     # Create population and genetic algorithm with the current hyperparameters
 #     data = Data()
@@ -1035,7 +1134,7 @@ def error_500(request, *args, **argv):
 #     start_time = time.time()  # Track start time
 
 #     # Evolve population over generations
-#     for generation in range(3):
+#     for generation in range(3):  # Adjust the number of generations as needed
 #         population = geneticAlgorithm.evolve(population)
 #         best_schedule = population.getSchedules()[0]  # Get best schedule (highest fitness)
 #         fitness = best_schedule.getFitness()
@@ -1055,11 +1154,4 @@ def error_500(request, *args, **argv):
 #         time_taken = end_time - start_time
 
 #     # Print the results of this grid search iteration
-#     print(f"Grid Search Iteration Results:")
-#     print(f"Population Size: {POPULATION_SIZE}")
-#     print(f"Elite Schedules: {NUMB_OF_ELITE_SCHEDULES}")
-#     print(f"Mutation Rate: {MUTATION_RATE}")
-#     print(f"Tournament Selection Size: {TOURNAMENT_SELECTION_SIZE}")
-#     print(f"Best Fitness: {best_fitness}")
-#     print(f"Time Taken to Reach Solution: {time_taken:.2f} seconds")
-#     print('-' * 40)
+#     print(f"{POPULATION_SIZE:<20}{MUTATION_RATE:<15}{time_taken:.2f}")

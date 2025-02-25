@@ -1,0 +1,2 @@
+Generation,Population Size,Mutation Rate,Best Fitness,Average Fitness,Cross-Over,Execution-Time(s)
+100,100,0.1,0.201,0.164,Uniform Crossover,22.567
