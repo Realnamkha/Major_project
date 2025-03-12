@@ -66,9 +66,9 @@
             <li class="{% active request instructorAdd %}">
               <a href="{{ instructorAdd }}">Instructor</a>
             </li>
-            <li class="{% active request roomAdd %}">
+            {% comment %} <li class="{% active request roomAdd %}">
               <a href="{{ roomAdd }}">Room</a>
-            </li>
+            </li> {% endcomment %}
             <li class="{% active request meetingTimeAdd %}">
               <a href="{{ meetingTimeAdd }}">Meeting time</a>
             </li>

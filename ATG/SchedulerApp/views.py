@@ -20,7 +20,7 @@ import math
 POPULATION_SIZE = 100
 NUMB_OF_ELITE_SCHEDULES = 30
 TOURNAMENT_SELECTION_SIZE = 20
-MUTATION_RATE = 0.1
+MUTATION_RATE = 0.01
 VARS = {'generationNum': 0,
         'terminateGens': False}
 
@@ -692,7 +692,7 @@ def timetable(request):
     schedule = population.getSchedules()[0]
     start_time = time.time()  # Start time tracking
 
-    while (schedule.getFitness() != 1.0) and (VARS['generationNum'] <= 2):
+    while (schedule.getFitness() != 1.0) and (VARS['generationNum'] <= 100):
         if VARS['terminateGens']:
             return HttpResponse('')
 

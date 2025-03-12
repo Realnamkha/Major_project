@@ -3,13 +3,12 @@ import matplotlib.pyplot as plt
 
 # Create the DataFrame
 data = {
-    "Generation": [100,100,100, 100, 100, 100],
-    "Population Size": [50,50,200, 100, 100, 200],
-    "Mutation Rate": [0.1,0.01,0.1, 0.01, 0.1, 0.01],
-    "Best Fitness": [0.3, 0.395,0.388,0.484, 0.343, 0.497],
-    "Average Fitness": [0.273, 0.39,0.319,0.475, 0.294, 0.485],
-    "Cross-Over": ["Uniform Crossover"] * 6,
-    "Execution-Time(s)": [219.14,231.97,1910.086, 792.978, 796.321, 1913.027],
+    "Generation": [899, 100],
+    "Population Size": [100, 200],
+    # "Mutation Rate": [0.01,0.01],
+    "Best Fitness": [26.78, 0.497],
+    # "Average Fitness": [0.5,0.115],
+    # "Cross-over Method": ["Uniform","Order"],
 }
 
 df = pd.DataFrame(data)
@@ -39,9 +38,9 @@ for (row, col), cell in table.get_celld().items():
     if row == 0:  # Header row
         cell.set_text_props(weight="bold", color="white")  # Bold and white text
         cell.set_facecolor("#4CAF50")  # Green background for header
-    elif row == highest_fitness_row + 1:  # Highlight the row with the highest "Best Fitness"
-        cell.set_facecolor("#FFEB3B")  # Yellow background for the highlighted row
+    # elif row == highest_fitness_row + 1:  # Highlight the row with the highest "Best Fitness"
+    #     cell.set_facecolor("#FFEB3B")  # Yellow background for the highlighted row
 
 # Save the table as a PNG file
-plt.savefig("table.png", bbox_inches="tight", dpi=300)
+plt.savefig("compare.png", bbox_inches="tight", dpi=300)
 print("Table saved as 'table.png'")
